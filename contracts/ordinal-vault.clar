@@ -507,3 +507,79 @@
     (ok true)
   )
 )
+
+;;                      FRACTIONAL OWNERSHIP & LIQUIDITY                     
+
+;; Enables fractional share transfers for enhanced liquidity
+(define-public (transfer-shares
+    (token-id uint)
+    (recipient principal)
+    (share-amount uint)
+  )
+  (let (
+      (sender-shares (unwrap! (get-fractional-shares token-id tx-sender)
+        ERR-INSUFFICIENT-BALANCE
+      ))
+      (current-recipient-shares (default-to { shares: u0 } (get-fractional-shares token-id recipient)))
+      (recipient-new-shares (unwrap! (safe-add (get shares current-recipient-shares) share-amount)
+        ERR-OVERFLOW
+      ))
+    )
+    (asserts! (validate-recipient recipient) ERR-INVALID-RECIPIENT)
+    (asserts! (>= (get shares sender-shares) share-amount)
+      ERR-INSUFFICIENT-BALANCE
+    )
+
+    ;; Update sender's fractional position
+    (map-set fractional-ownership {
+      token-id: token-id,
+      owner: tx-sender,
+    } { shares: (- (get shares sender-shares) share-amount) }
+    )
+
+    ;; Update recipient's fractional position
+    (map-set fractional-ownership {
+      token-id: token-id,
+      owner: recipient,
+    } { shares: recipient-new-shares }
+    )
+
+    (ok true)
+  )
+)
+
+;;                         YIELD GENERATION PROTOCOL                         
+
+;; Stakes NFT to generate yield - Bitcoin-secured passive income
+(define-public (stake-nft (token-id uint))
+  (let ((token (unwrap! (get-token-info token-id) ERR-INVALID-TOKEN)))
+    (asserts! (is-eq tx-sender (get owner token)) ERR-NOT-TOKEN-OWNER)
+    (asserts! (not (get is-staked token)) ERR-ALREADY-STAKED)
+
+    ;; Initialize staking state
+    (map-set tokens { token-id: token-id }
+      (merge token {
+        is-staked: true,
+        stake-timestamp: stacks-block-height,
+      })
+    )
+
+    ;; Initialize reward tracking
+    (map-set staking-rewards { token-id: token-id } {
+      accumulated-yield: u0,
+      last-claim: stacks-block-height,
+    })
+
+    (var-set total-staked (+ (var-get total-staked) u1))
+    (ok true)
+  )
+)
+
+;; Unstakes NFT and claims final rewards
+(define-public (unstake-nft (token-id uint))
+  (let (
+      (token (unwrap! (get-token-info token-id) ERR-INVALID-TOKEN))
+      (rewards (unwrap! (get-staking-rewards token-id) ERR-NOT-STAKED))
+    )
+    (asserts! (is-eq tx-sender (get owner token)) ERR-NOT-TOKEN-OWNER)
+    (asserts! (get is-staked token) ERR-NOT-STAKED)
