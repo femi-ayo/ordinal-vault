@@ -369,3 +369,74 @@
     (as-contract (stx-transfer? rewards (as-contract tx-sender) (get owner token)))
   )
 )
+
+;; Yield generation and reward distribution system
+(define-map staking-rewards
+  { token-id: uint }
+  {
+    accumulated-yield: uint,
+    last-claim: uint,
+  }
+)
+
+;;                            SECURITY UTILITIES                             
+
+;; Validates URI format and length constraints
+(define-private (validate-uri (uri (string-ascii 256)))
+  (let ((uri-len (len uri)))
+    (and
+      (> uri-len u0)
+      (<= uri-len u256)
+    )
+  )
+)
+
+;; Prevents self-transfers and contract ownership conflicts
+(define-private (validate-recipient (recipient principal))
+  (not (is-eq recipient (as-contract tx-sender)))
+)
+
+;; Overflow protection for arithmetic operations
+(define-private (safe-add
+    (a uint)
+    (b uint)
+  )
+  (let ((sum (+ a b)))
+    (asserts! (>= sum a) ERR-OVERFLOW)
+    (ok sum)
+  )
+)
+
+;;                        COLLATERAL-BACKED NFT SYSTEM                       
+
+;; Mints new NFT with STX collateral backing - Bitcoin-inspired security model
+(define-public (mint-nft
+    (uri (string-ascii 256))
+    (collateral uint)
+  )
+  (let (
+      (token-id (+ (var-get total-supply) u1))
+      (collateral-requirement (/ (* (var-get min-collateral-ratio) collateral) u100))
+    )
+    (asserts! (validate-uri uri) ERR-INVALID-URI)
+    (asserts! (>= (stx-get-balance tx-sender) collateral-requirement)
+      ERR-INSUFFICIENT-COLLATERAL
+    )
+
+    ;; Lock collateral in contract vault
+    (try! (stx-transfer? collateral-requirement tx-sender (as-contract tx-sender)))
+
+    ;; Register new NFT with full metadata
+    (map-set tokens { token-id: token-id } {
+      owner: tx-sender,
+      uri: uri,
+      collateral: collateral,
+      is-staked: false,
+      stake-timestamp: u0,
+      fractional-shares: u0,
+    })
+
+    (var-set total-supply token-id)
+    (ok token-id)
+  )
+)
