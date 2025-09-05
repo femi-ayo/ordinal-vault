@@ -440,3 +440,70 @@
     (ok token-id)
   )
 )
+
+;; Secure NFT transfer with ownership verification
+(define-public (transfer-nft
+    (token-id uint)
+    (recipient principal)
+  )
+  (let ((token (unwrap! (get-token-info token-id) ERR-INVALID-TOKEN)))
+    (asserts! (validate-recipient recipient) ERR-INVALID-RECIPIENT)
+    (asserts! (is-eq tx-sender (get owner token)) ERR-NOT-TOKEN-OWNER)
+    (asserts! (not (get is-staked token)) ERR-ALREADY-STAKED)
+
+    ;; Execute ownership transfer
+    (map-set tokens { token-id: token-id } (merge token { owner: recipient }))
+    (ok true)
+  )
+)
+
+;;                         TRUSTLESS MARKETPLACE ENGINE                      
+
+;; Creates marketplace listing for peer-to-peer trading
+(define-public (list-nft
+    (token-id uint)
+    (price uint)
+  )
+  (let ((token (unwrap! (get-token-info token-id) ERR-INVALID-TOKEN)))
+    (asserts! (> price u0) ERR-INVALID-PRICE)
+    (asserts! (is-eq tx-sender (get owner token)) ERR-NOT-TOKEN-OWNER)
+    (asserts! (not (get is-staked token)) ERR-ALREADY-STAKED)
+
+    ;; Create active marketplace listing
+    (map-set token-listings { token-id: token-id } {
+      price: price,
+      seller: tx-sender,
+      active: true,
+    })
+    (ok true)
+  )
+)
+
+;; Executes atomic purchase with automated fee distribution
+(define-public (purchase-nft (token-id uint))
+  (let (
+      (listing (unwrap! (get-listing token-id) ERR-LISTING-NOT-FOUND))
+      (price (get price listing))
+      (seller (get seller listing))
+      (fee (/ (* price (var-get protocol-fee)) u1000))
+    )
+    (asserts! (get active listing) ERR-LISTING-NOT-FOUND)
+
+    ;; Execute payment to seller
+    (try! (stx-transfer? price tx-sender seller))
+
+    ;; Collect protocol fee for treasury
+    (try! (stx-transfer? fee tx-sender (as-contract tx-sender)))
+
+    ;; Transfer NFT ownership
+    (try! (transfer-nft token-id tx-sender))
+
+    ;; Clear marketplace listing
+    (map-set token-listings { token-id: token-id } {
+      price: u0,
+      seller: seller,
+      active: false,
+    })
+    (ok true)
+  )
+)
